@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Real-Life ESP + Aimbot Simulator</title>
+<style>
+body {
+  margin: 0;
+  font-family: 'Segoe UI', sans-serif;
+  background: #0f0f1a;
+  color: #00ffea;
+}
+#gui {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: rgba(20,20,40,0.85);
+  padding: 15px;
+  border-radius: 12px;
+  z-index: 10;
+}
+#gui h1 {
+  margin: 0 0 10px 0;
+  font-size: 18px;
+  color: #00ffea;
+}
+#gui label, #gui button {
+  display: block;
+  margin: 5px 0;
+}
+canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+</style>
+</head>
+<body>
+
+<div id="gui">
+  <h1>ESP + Aimbot Simulator</h1>
+  <label><input type="checkbox" id="espCheckbox" checked> Enable ESP</label>
+  <label><input type="checkbox" id="aimbotCheckbox" checked> Enable Aimbot</label>
+  <label>FOV Size: <input type="range" id="fovSlider" min="50" max="400" value="200"></label>
+  <label>Smoothing: <input type="range" id="smoothSlider" min="1" max="100" value="20"></label>
+  <button id="startBtn">Start Camera</button>
+</div>
+
+<canvas id="overlay"></canvas>
+<video id="webcam" autoplay playsinline style="display:none;"></video>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+<script>
+let video = document.getElementById('webcam');
+let canvas = document.getElementById('overlay');
+let ctx = canvas.getContext('2d');
+
+let espCheckbox = document.getElementById('espCheckbox');
+let aimbotCheckbox = document.getElementById('aimbotCheckbox');
+let fovSlider = document.getElementById('fovSlider');
+let smoothSlider = document.getElementById('smoothSlider');
+let startBtn = document.getElementById('startBtn');
+
+let model;
+let crosshair = {x: 0, y: 0};
+
+startBtn.addEventListener('click', async () => {
+  await startCamera();
+  model = await cocoSsd.load();
+  requestAnimationFrame(detectFrame);
+});
+
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { exact: "environment" },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        frameRate: { ideal: 60, max: 60 }
+      }
+    });
+    video.srcObject = stream;
+    await new Promise(resolve => video.onloadedmetadata = resolve);
+  } catch (err) {
+    // fallback to default camera if back camera not available
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { frameRate: { ideal: 60 } } });
+    video.srcObject = stream;
+    await new Promise(resolve => video.onloadedmetadata = resolve);
+  }
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  crosshair.x = canvas.width/2;
+  crosshair.y = canvas.height/2;
+}
+
+async function detectFrame() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+  let predictions = await model.detect(video);
+
+  let closestTarget = null;
+  let minDist = Infinity;
+
+  predictions.forEach(p => {
+    if (p.class === "person" && p.score > 0.5) {
+      let [x, y, w, h] = p.bbox;
+      let cx = x + w/2;
+      let cy = y + h/2;
+
+      // Draw ESP
+      if (espCheckbox.checked) {
+        ctx.strokeStyle = 'red';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, w, h);
+      }
+
+      // Check if inside FOV (circle for simplicity)
+      let dx = cx - canvas.width/2;
+      let dy = cy - canvas.height/2;
+      let fov = parseInt(fovSlider.value);
+      if (dx*dx + dy*dy < fov*fov) {
+        let dist = Math.hypot(dx, dy);
+        if (dist < minDist) {
+          minDist = dist;
+          closestTarget = {x: cx, y: cy};
+        }
+      }
+    }
+  });
+
+  // Draw FOV circle
+  ctx.strokeStyle = 'cyan';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(canvas.width/2, canvas.height/2, parseInt(fovSlider.value), 0, 2*Math.PI);
+  ctx.stroke();
+
+  // Move crosshair toward target
+  if (aimbotCheckbox.checked && closestTarget) {
+    let smoothing = parseInt(smoothSlider.value)/100;
+    crosshair.x += (closestTarget.x - crosshair.x) * smoothing;
+    crosshair.y += (closestTarget.y - crosshair.y) * smoothing;
+  }
+
+  // Draw crosshair
+  ctx.strokeStyle = 'lime';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(crosshair.x - 15, crosshair.y);
+  ctx.lineTo(crosshair.x + 15, crosshair.y);
+  ctx.moveTo(crosshair.x, crosshair.y - 15);
+  ctx.lineTo(crosshair.x, crosshair.y + 15);
+  ctx.stroke();
+
+  requestAnimationFrame(detectFrame);
+}
+</script>
+
+</body>
+</html>
